@@ -134,7 +134,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) {
             [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.panel.isVisible, !self.model.pinned else { return }
+                // A press on the panel itself (dragging it) can be reported to other apps on some setups.
+                guard let self, self.panel.isVisible, !self.model.pinned,
+                      !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
                 self.hide()
             }
         }
@@ -192,7 +194,24 @@ final class PanelController: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         // Whatever was copied or pasted while the panel was open is used up, so it won't replace the panel's text later.
         ClipboardWatcher.shared.markUsed()
-        if !model.pinned { hide() }
+        guard !model.pinned else { return }
+        // Some setups take key status away while the panel is being dragged. That isn't the user leaving it: keep
+        // it open and give it the keyboard back once the drag ends.
+        if NSEvent.pressedMouseButtons != 0, panel.frame.contains(NSEvent.mouseLocation) {
+            regainKeyAfterDrag()
+        } else {
+            hide()
+        }
+    }
+
+    private func regainKeyAfterDrag() {
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, NSEvent.pressedMouseButtons == 0 else { return }
+                timer.invalidate()
+                if self.panel.isVisible, !self.panel.isKeyWindow { self.panel.makeKey() }
+            }
+        }
     }
 
     func windowDidMove(_ notification: Notification) {
