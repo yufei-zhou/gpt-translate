@@ -11,11 +11,11 @@ ASSET="GPT-Translate.zip"
 REQUIREMENT='identifier "io.github.yufei-zhou.GPTTranslate" and certificate leaf = H"adad713a7d3f384ad4c87419e1900d58c1df550f"'
 
 DIR="${INSTALL_DIR:-/Applications}"
-if [ ! -w "$DIR" ]; then
+if [ ! -w "${DIR}" ]; then
   DIR="$HOME/Applications"
-  mkdir -p "$DIR"
+  mkdir -p "${DIR}"
 fi
-TARGET="$DIR/$APP_NAME"
+TARGET="${DIR}/$APP_NAME"
 
 # /releases/latest redirects to the newest release's tag.
 latest_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
@@ -30,14 +30,14 @@ installed=""
 if [ -d "$TARGET" ]; then
   installed=$(defaults read "$TARGET/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
 fi
-if [ "$installed" = "$version" ]; then
-  echo "GPT Translate 已是最新版本（$version）。"
+if [ "${installed}" = "${version}" ]; then
+  echo "GPT Translate 已是最新版本（${version}）。"
   exit 0
 fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-echo "正在下载 GPT Translate $version…"
+echo "正在下载 GPT Translate ${version}…"
 curl -fsSL -o "$tmp/$ASSET" "https://github.com/$REPO/releases/download/$tag/$ASSET"
 ditto -x -k "$tmp/$ASSET" "$tmp"
 if ! codesign --verify --strict -R="$REQUIREMENT" "$tmp/$APP_NAME" 2>/dev/null; then
@@ -51,10 +51,10 @@ ditto "$tmp/$APP_NAME" "$TARGET"
 # curl doesn't mark downloads as quarantined, but clear it in case anything did.
 xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
 
-if [ -n "$installed" ]; then
-  echo "已从 $installed 更新到 $version。"
+if [ -n "${installed}" ]; then
+  echo "已从 ${installed} 更新到 ${version}。"
 else
-  echo "已安装 GPT Translate $version 到 $DIR。"
+  echo "已安装 GPT Translate ${version} 到 ${DIR}。"
 fi
 if [ "${NO_LAUNCH:-}" != 1 ]; then
   open "$TARGET"
