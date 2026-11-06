@@ -7,7 +7,7 @@ REPO="yufei-zhou/gpt-translate"
 APP_NAME="GPT Translate.app"
 ASSET="GPT-Translate.zip"
 # Every release is signed with this certificate. A download signed any other way is refused, and because the
-# signature never changes, macOS keeps the Input Monitoring and Keychain permissions across updates.
+# signature never changes, macOS keeps the Input Monitoring permission across updates.
 REQUIREMENT='identifier "io.github.yufei-zhou.GPTTranslate" and certificate leaf = H"adad713a7d3f384ad4c87419e1900d58c1df550f"'
 
 DIR="${INSTALL_DIR:-/Applications}"
@@ -53,6 +53,8 @@ xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
 
 if [ -n "${installed}" ]; then
   echo "已从 ${installed} 更新到 ${version}。"
+  # Keychain access is tied to the exact build, so the update has to be allowed once.
+  echo "更新后第一次打开时如果要求输入电脑密码，输入后请点「始终允许」。"
 else
   echo "已安装 GPT Translate ${version} 到 ${DIR}。"
 fi

@@ -6,7 +6,8 @@ cd "$(dirname "$0")"
 APP="build/GPT Translate.app"
 BUNDLE_ID="io.github.yufei-zhou.GPTTranslate"
 # Releases are signed with one fixed self-signed certificate, so macOS keeps treating every update as the same app
-# and the Input Monitoring and Keychain permissions carry over. Without it the build is signed ad hoc.
+# and the Input Monitoring permission carries over. (Keychain access is tied to the exact build without a Team ID,
+# so the first launch after an update asks for the Mac password once.) Without it the build is signed ad hoc.
 SIGN_ID="${SIGN_ID:-GPT Translate Release}"
 
 swift build -c release --arch arm64 --arch x86_64

@@ -9,7 +9,7 @@ enum Models {
     static let terra = AIModel(id: "gpt-6.1-terra", name: "GPT-6.1 Terra")
     static let sol = AIModel(id: "gpt-6.1-sol", name: "GPT-6.1 Sol")
     static let luna = AIModel(id: "gpt-6-luna", name: "GPT-6 Luna")
-    static let translation = [terra, sol, luna]
+    static let translation = [sol, terra, luna]
     static let aligner = luna.id
 
     /// USD per million tokens (input, cached input, output). Unknown models are priced like the flagship GPT-6 Astra to err on the safe side.
