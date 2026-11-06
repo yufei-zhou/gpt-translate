@@ -111,7 +111,7 @@ enum Evaluator {
     }
 
     private static func streamPart(_ index: Int, item: Item, model: String, key: String, clock: Clock) async throws -> StreamResult {
-        let (body, betas) = Models.requestBody(model: model, system: Translator.systemPrompt,
+        let (body, betas) = Models.requestBody(model: model, system: Translator.instructions(part: index),
                                                user: Translator.userMessage(item.text, part: index), maxTokens: 16000)
         return try await APIClient.stream(key: key, body: body, betas: betas) { raw in
             if clock.partFirst[index] == nil, let first = Translator.parse(raw).targets.first, !first.text.isEmpty {

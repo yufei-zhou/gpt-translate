@@ -92,15 +92,21 @@ enum APIClient {
     /// Streams a Responses request, calling `onUpdate` with the accumulated text after every delta.
     static func stream(key: String, body: [String: Any], betas: [String] = [], progress: StreamProgress? = nil,
                        onUpdate: @escaping @MainActor (String) -> Void) async throws -> StreamResult {
+        let progress = progress ?? StreamProgress()
         var attempt = 0
         while true {
             do {
-                return try await streamOnce(key: key, body: body, progress: progress ?? StreamProgress(), onUpdate: onUpdate)
+                return try await streamOnce(key: key, body: body, progress: progress, onUpdate: onUpdate)
             } catch APIError.http(let code, let message)
                         where attempt < 1 && (code == 429 || code >= 500) && !message.contains("quota") {
                 // One quiet retry for rate limits and overload; a rate limit gets a longer pause.
                 attempt += 1
                 try await Task.sleep(nanoseconds: code == 429 ? 2_000_000_000 : 800_000_000)
+            } catch APIError.api where attempt < 1 && progress.text.isEmpty {
+                // A response can also fail after the request was accepted (a transient server error). Retry once
+                // if nothing has been shown yet.
+                attempt += 1
+                try await Task.sleep(nanoseconds: 800_000_000)
             }
         }
     }
@@ -157,15 +163,21 @@ enum APIClient {
                 let response = object["response"] as? [String: Any]
                 if let usage = response?["usage"] as? [String: Any] { merge(usage, into: &result.usage) }
                 progress.usage = result.usage
-                let error = response?["error"] as? [String: Any]
-                throw APIError.api(error?["message"] as? String ?? "未知错误")
+                throw APIError.api(streamError(response?["error"] as? [String: Any] ?? [:]))
             case "error":
-                throw APIError.api(object["message"] as? String ?? "未知错误")
+                throw APIError.api(streamError(object["error"] as? [String: Any] ?? object))
             default:
                 break
             }
         }
         return result
+    }
+
+    /// The message of an error reported inside the stream, else its code.
+    private static func streamError(_ error: [String: Any]) -> String {
+        if let message = error["message"] as? String, !message.isEmpty { return message }
+        if let code = error["code"] as? String, !code.isEmpty { return code }
+        return "未知错误"
     }
 
     private static var lastWarmUp = Date.distantPast

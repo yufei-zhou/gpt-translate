@@ -35,6 +35,17 @@ enum Translator {
     <t lang="code of the second target">translation</t>
     """
 
+    /// The system prompt for one request. GPT models follow the system prompt's output format over a narrower one in
+    /// the user message, so a request for a single target says so here too, after the shared (cacheable) prefix.
+    static func instructions(part: Int? = nil, forced: (source: String, target: String)? = nil) -> String {
+        if let forced {
+            return systemPrompt + "\n\nThis request: the source language is \(forced.source). Reply with <src>\(forced.source)</src> and a single <t lang=\"\(forced.target)\"> element, the translation into \(forced.target) only. Do not write any other <t> element."
+        }
+        guard let part else { return systemPrompt }
+        let which = part == 0 ? "first" : "second"
+        return systemPrompt + "\n\nThis request is one of two run in parallel, one per target language. Reply with <src> and only the \(which) <t> element: the translation into the \(which) target language. Do not write the other <t> element."
+    }
+
     /// `part` 0 or 1 asks for only that target, so the two panes can be translated by parallel requests;
     /// `forced` pins the source and target when the two requests disagreed about the routing.
     static func userMessage(_ text: String, part: Int? = nil, forced: (source: String, target: String)? = nil) -> String {

@@ -337,7 +337,7 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
     /// Streams one target language into its pane.
     private func translatePart(_ part: Int, text: String, forced: (source: String, target: String)?,
                                key: String, model: String, gen: Int) async throws -> StreamResult {
-        let (body, betas) = Models.requestBody(model: model, system: Translator.systemPrompt,
+        let (body, betas) = Models.requestBody(model: model, system: Translator.instructions(part: part, forced: forced),
                                                user: Translator.userMessage(text, part: part, forced: forced),
                                                maxTokens: Translator.maxTokens(for: text, targets: 1))
         let result = try await stream(body: body, betas: betas, key: key, model: model, gen: gen, parts: [part])
@@ -380,7 +380,14 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
     private func applyStream(_ raw: String, parts: [Int]) {
         let output = Translator.parse(raw)
         if sourceLang == nil, let source = output.source { sourceLang = source }
-        for (target, part) in zip(output.targets, parts) {
+        var targets = output.targets
+        // A parallel request owns one pane. If the model wrote both targets anyway, show the one this pane is for,
+        // not whichever came first.
+        if parts.count == 1, targets.count > 1, let source = output.source ?? sourceLang {
+            let wanted = Translator.targets(forSource: source)[parts[0]]
+            targets = [targets.first { Translator.baseLanguage($0.lang) == wanted } ?? targets[min(parts[0], targets.count - 1)]]
+        }
+        for (target, part) in zip(targets, parts) {
             if targetLangs[part] != target.lang { targetLangs[part] = target.lang }
             targetTexts[part] = target.text
             if hasTarget[part] != !target.text.isEmpty { hasTarget[part] = !target.text.isEmpty }
