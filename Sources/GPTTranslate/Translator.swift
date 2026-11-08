@@ -37,13 +37,15 @@ enum Translator {
 
     /// The system prompt for an image request. GPT models skip a transcript that only the user message asks for
     /// (measured: 2 of 52 replies), since the output format above says three elements and nothing else.
-    static let imageSystemPrompt = systemPrompt + """
-
-
-    This request: the text to translate is in the attached image. Begin your reply with <source></source> holding \
-    all of the image's text written out exactly as it appears, in natural reading order: keep line breaks, and do \
-    not translate or correct anything. Then write the three elements.
-    """
+    /// `part` 0 or 1 asks for only that target, for the two parallel requests; nil asks for both.
+    static func imageSystemPrompt(part: Int?) -> String {
+        let transcribe = "Begin your reply with <source></source> holding all of the image's text written out exactly as it appears, in natural reading order: keep line breaks, and do not translate or correct anything. Then write "
+        guard let part else {
+            return systemPrompt + "\n\nThis request: the text to translate is in the attached image. " + transcribe + "the three elements."
+        }
+        let which = part == 0 ? "first" : "second"
+        return systemPrompt + "\n\nThis request: the text to translate is in the attached image. It is one of two requests run in parallel, one per target language. " + transcribe + "<src> and only the \(which) <t> element: the translation into the \(which) target language. Do not write the other <t> element."
+    }
 
     /// The system prompt for one request. GPT models follow the system prompt's output format over a narrower one in
     /// the user message, so a request for a single target says so here too, after the shared (cacheable) prefix.
@@ -58,11 +60,19 @@ enum Translator {
 
     /// Sent with an image: the model writes out its text first, which fills the source pane as it arrives, then
     /// translates it. (Measured on real photos: writing the text out first misreads less than translating directly.)
-    static let imageInstruction = """
-    The text to translate is in the image above. First write out all of its text exactly as it appears, in natural \
-    reading order, inside <source></source>: keep line breaks, and do not translate or correct anything. Then reply \
-    with the three elements as usual.
-    """
+    static func imageInstruction(part: Int?) -> String {
+        let reply: String
+        switch part {
+        case 0: reply = "reply with <src> and only the first <t> element (the first target language). Omit the second."
+        case 1: reply = "reply with <src> and only the second <t> element (the second target language). Omit the first."
+        default: reply = "reply with the three elements as usual."
+        }
+        return """
+        The text to translate is in the image above. First write out all of its text exactly as it appears, in \
+        natural reading order, inside <source></source>: keep line breaks, and do not translate or correct anything. \
+        Then \(reply)
+        """
+    }
 
     /// The text read from an image so far, from a possibly incomplete reply.
     static func transcript(_ raw: String) -> String? {
