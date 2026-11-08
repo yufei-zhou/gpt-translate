@@ -4,6 +4,7 @@ A background macOS app. Press ⌘C C to translate the selection into two languag
 
 - zh → en, fr · en → zh, fr · fr → en, zh · other → en, zh
 - With nothing selected, ⌘C C translates a clipboard copy made in the last 5 minutes that hasn't been used yet; otherwise it reopens the panel as you left it. ⌘N clears it.
+- Images work too: copy an image (or an image file) and press ⌘C C, or paste or drop one into the source pane. The model writes out the image's text, then translates it.
 - The API key is stored in the Keychain.
 
 ## 安装 / 更新

@@ -36,11 +36,16 @@ enum Models {
     /// Request body tuned per model for short, low-latency answers. There are no betas; the slot stays so callers
     /// read the same as before.
     static func requestBody(model: String, system: String, user: String, maxTokens: Int) -> (body: [String: Any], betas: [String]) {
+        requestBody(model: model, system: system, input: user, maxTokens: maxTokens)
+    }
+
+    /// `input` is the user's text, or a list of input items (an image and its instruction).
+    static func requestBody(model: String, system: String, input: Any, maxTokens: Int) -> (body: [String: Any], betas: [String]) {
         let effort = effort(for: model)
         let body: [String: Any] = [
             "model": model,
             "instructions": system,
-            "input": user,
+            "input": input,
             // Reasoning tokens count against the ceiling too, so leave them room.
             "max_output_tokens": max(16, maxTokens + (effort == "none" ? 0 : 4_000)),
             "reasoning": ["effort": effort],
@@ -50,6 +55,18 @@ enum Models {
             "prompt_cache_key": "gpt-translate",
         ]
         return (body, [])
+    }
+}
+
+extension Models {
+    /// A user message holding an image (as a base64 data URL) followed by `text`. Detail "auto" keeps the image's own
+    /// resolution, which ImagePayload has already capped, so small print stays legible.
+    static func imageInput(_ payload: (data: Data, mediaType: String), text: String) -> [[String: Any]] {
+        [["role": "user", "content": [
+            ["type": "input_image", "image_url": "data:\(payload.mediaType);base64,\(payload.data.base64EncodedString())",
+             "detail": "auto"],
+            ["type": "input_text", "text": text],
+        ]]]
     }
 }
 

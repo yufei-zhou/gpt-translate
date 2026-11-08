@@ -5,7 +5,45 @@ import SwiftUI
 final class PaneTextView: NSTextView {
     var pane = 0
     var placeholder: String?
+    var showsPlaceholder = true { didSet { needsDisplay = true } }
     var onHover: ((Int, Int?) -> Void)?
+    /// An image dropped or pasted into the source pane.
+    var onImage: ((NSImage) -> Void)?
+    /// An image shown above the text, inside the scrolling content, so it scrolls away with the text.
+    var headerImage: NSImage? { didSet { updateHeader() } }
+    private var headerSize = NSSize.zero
+    /// Gap between the header image and the text.
+    private static let headerGap: CGFloat = 12
+
+    /// Room for the header: the inset adds half of it above and half below the text, and textContainerOrigin moves
+    /// the text down by the other half, so all of it ends up above the text and the view's height still fits.
+    private var headerShift: CGFloat { headerSize == .zero ? 0 : (headerSize.height + Self.headerGap) / 2 }
+
+    override var textContainerOrigin: NSPoint {
+        let origin = super.textContainerOrigin
+        return NSPoint(x: origin.x, y: origin.y + headerShift)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged, headerImage != nil { updateHeader() }
+    }
+
+    /// Fits the image to the text's width, at most TranslatorModel.imageMaxHeight tall.
+    private func updateHeader() {
+        let padding = textContainer?.lineFragmentPadding ?? 0
+        var size = NSSize.zero
+        if let image = headerImage, image.size.width > 0, image.size.height > 0 {
+            let width = max(40, frame.width - textContainerInset.width * 2 - padding * 2)
+            let scale = min(width / image.size.width, TranslatorModel.imageMaxHeight / image.size.height)
+            size = NSSize(width: (image.size.width * scale).rounded(), height: (image.size.height * scale).rounded())
+        }
+        guard size != headerSize else { return }
+        headerSize = size
+        textContainerInset = NSSize(width: textContainerInset.width, height: headerShift)
+        needsDisplay = true
+    }
     private var hoverArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -42,9 +80,51 @@ final class PaneTextView: NSTextView {
         needsDisplay = true
     }
 
+    // The source pane takes images too: dropped, or pasted with nothing but an image on the clipboard.
+
+    private func droppedImage(_ sender: NSDraggingInfo) -> NSImage? {
+        pane == 0 ? PasteboardContent.image(from: sender.draggingPasteboard) : nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        droppedImage(sender) != nil ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        droppedImage(sender) != nil ? .copy : super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let image = droppedImage(sender) else { return super.performDragOperation(sender) }
+        onImage?(image)
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if !pasteImage(from: .general) { super.paste(sender) }
+    }
+
+    /// Takes the pasteboard's image when it holds an image and no text.
+    @discardableResult
+    func pasteImage(from pasteboard: NSPasteboard) -> Bool {
+        guard pane == 0, case .image(let image) = PasteboardContent.read(pasteboard) else { return false }
+        onImage?(image)
+        return true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        if let headerImage, headerSize != .zero {
+            let padding = textContainer?.lineFragmentPadding ?? 0
+            let rect = NSRect(origin: NSPoint(x: textContainerInset.width + padding, y: 0), size: headerSize)
+            if rect.intersects(dirtyRect) {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).addClip()
+                headerImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
         super.draw(dirtyRect)
-        guard string.isEmpty, let placeholder else { return }
+        guard string.isEmpty, showsPlaceholder, let placeholder else { return }
         let padding = textContainer?.lineFragmentPadding ?? 0
         (placeholder as NSString).draw(
             at: NSPoint(x: textContainerOrigin.x + padding, y: textContainerOrigin.y),
@@ -71,6 +151,13 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
     @Published var stale = false
 
     private(set) var sourceText = ""
+    /// An image to translate, shown above the source text; the model's reading of it fills the source text.
+    @Published private(set) var sourceImage: NSImage?
+    private var imagePayload: (data: Data, mediaType: String)?
+    /// Set while the model is writing out the image's text, which goes into the source pane as it arrives.
+    private var readingImage = false
+    /// The image shown in the source pane is at most this tall.
+    static let imageMaxHeight: CGFloat = 220
     private var targetTexts = ["", ""]
     private var views: [Int: PaneTextView] = [:]
     private let scrollSync = ScrollSync()
@@ -100,12 +187,40 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
         textView.pane = pane
         textView.onHover = { [weak self] pane, index in self?.hoverChanged(pane: pane, index: index) }
         scrollSync.add(textView)
+        if pane == 0 {
+            // Images also arrive as drags (files, or images from other apps).
+            textView.registerForDraggedTypes([.fileURL, .png, .tiff])
+            // The panel is built on first use, which may be for an image.
+            textView.headerImage = sourceImage
+            textView.showsPlaceholder = sourceImage == nil
+            textView.onImage = { [weak self] image in
+                self?.load(image: image)
+                self?.translate()
+            }
+        }
         applyText(pane)
     }
 
     func focusSource() {
         guard let tv = views[0] else { return }
         tv.window?.makeFirstResponder(tv)
+    }
+
+    var debugSourceLength: Int { sourceText.count }
+
+    /// Debug: pastes from `pasteboard` into the source pane, the same path as ⌘V.
+    func debugPasteImage(from pasteboard: NSPasteboard) {
+        guard let tv = views[0] else { return }
+        tv.window?.makeFirstResponder(tv)
+        tv.pasteImage(from: pasteboard)
+    }
+
+    /// Debug: what the source pane holds, by length only.
+    func debugImageState() -> String {
+        let size = sourceImage.map { String(format: "%.0fx%.0f", $0.size.width, $0.size.height) } ?? "none"
+        return "image \(size) payload \(imagePayload.map { "\($0.mediaType) \($0.data.count / 1024)KB" } ?? "none") "
+            + "source \(sourceText.count) chars, lang \(sourceLang ?? "?") targets \(targetLangs) \(targetTexts.map(\.count)) "
+            + "translating \(isTranslating) error \(errorMessage ?? "none") height \(Int(contentHeight()))"
     }
 
     func debugSourceSelection() -> String {
@@ -179,6 +294,7 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
         cancelWork()
         pendingConfirmation = nil
         confirmation = nil
+        setImage(nil)
         sourceText = text
         targetTexts = ["", ""]
         sourceLang = nil
@@ -196,6 +312,7 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
         pendingConfirmation = nil
         confirmation = nil
         self.entry = entry
+        setImage(nil)
         sourceText = entry.source
         sourceLang = entry.sourceLang
         let targets = entry.targets + Array(repeating: TargetText(lang: "", text: ""), count: max(0, 2 - entry.targets.count))
@@ -211,7 +328,22 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
         for pane in 0...2 { applyText(pane) }
     }
 
+    /// An empty panel showing `image`; translate() then has the model read and translate it.
+    func load(image: NSImage) {
+        load(text: "")
+        setImage(image)
+        onContentChange?(true)
+    }
+
+    private func setImage(_ image: NSImage?) {
+        sourceImage = image
+        imagePayload = image.flatMap(ImagePayload.encode)
+        views[0]?.showsPlaceholder = image == nil
+        views[0]?.headerImage = image
+    }
+
     private func cancelWork() {
+        readingImage = false
         truncated = [false, false]
         generation += 1
         task?.cancel()
@@ -224,6 +356,8 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
 
     func translate() {
         let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An image whose text hasn't been read yet; once it has, that (possibly edited) text is what gets translated.
+        if text.isEmpty, let payload = imagePayload { return translateImage(payload) }
         guard !text.isEmpty else { return }
         errorMessage = nil
         errorNeedsSettings = false
@@ -321,6 +455,57 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
         cancelWork()
     }
 
+    /// One request: the model writes out the image's text (shown in the source pane as it arrives), then both
+    /// translations.
+    private func translateImage(_ payload: (data: Data, mediaType: String)) {
+        errorMessage = nil
+        errorNeedsSettings = false
+        if let blocked = UsageTracker.shared.blockedMessage {
+            show(error: blocked, needsSettings: true)
+            return
+        }
+        guard let key = Keychain.apiKey, !key.isEmpty else {
+            show(error: "还没有设置 OpenAI API Key。", needsSettings: true)
+            return
+        }
+        let model = AppSettings.shared.model
+        cancelWork()
+        let gen = generation
+        stale = false
+        clearAlignment()
+        sourceLang = nil
+        targetLangs = ["", ""]
+        targetTexts = ["", ""]
+        hasTarget = [false, false]
+        for pane in 1...2 { applyText(pane) }
+        isTranslating = true
+        streaming = [true, true]
+        readingImage = true
+
+        let (body, betas) = Models.requestBody(model: model, system: Translator.imageSystemPrompt,
+                                               input: Models.imageInput(payload, text: Translator.imageInstruction),
+                                               maxTokens: 16_000)
+        task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.stream(body: body, betas: betas, key: key, model: model, gen: gen, parts: [0, 1])
+                guard gen == self.generation else { return }
+                self.applyStream(result.text, parts: [0, 1])
+                self.readingImage = false
+                if result.stopReason == "max_tokens" { self.truncated[self.hasTarget[1] ? 1 : 0] = true }
+                self.finish(results: [result], source: self.sourceText, gen: gen, key: key)
+            } catch {
+                guard gen == self.generation, !Task.isCancelled else { return }
+                if (error as? URLError)?.code == .cancelled { return }
+                self.readingImage = false
+                self.isTranslating = false
+                self.streaming = [false, false]
+                let described = APIClient.describe(error)
+                self.show(error: described.message, needsSettings: described.needsSettings)
+            }
+        }
+    }
+
     /// Streams both target languages, one after the other, from a single request.
     private func translateBoth(text: String, key: String, model: String, gen: Int) async throws -> StreamResult {
         let (body, betas) = Models.requestBody(model: model, system: Translator.systemPrompt,
@@ -379,6 +564,10 @@ final class TranslatorModel: NSObject, ObservableObject, NSTextViewDelegate {
     /// Shows the reply's targets, in order, in the given panes (both panes, or the one a parallel request owns).
     private func applyStream(_ raw: String, parts: [Int]) {
         let output = Translator.parse(raw)
+        if readingImage, let transcript = Translator.transcript(raw), transcript != sourceText {
+            sourceText = transcript
+            applyText(0)
+        }
         if sourceLang == nil, let source = output.source { sourceLang = source }
         var targets = output.targets
         // A parallel request owns one pane. If the model wrote both targets anyway, show the one this pane is for,

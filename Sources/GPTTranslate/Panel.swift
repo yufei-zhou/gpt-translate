@@ -78,6 +78,13 @@ final class PanelController: NSObject, NSWindowDelegate {
         if translate { model.translate() }
     }
 
+    /// An image to read and translate, like text that was just selected.
+    func show(image: NSImage) {
+        model.load(image: image)
+        present(for: "")
+        model.translate()
+    }
+
     func show(entry: HistoryEntry) {
         model.load(entry: entry)
         present(for: entry.source)

@@ -1,7 +1,7 @@
 import AppKit
 
-/// Decides whether ⌘C C with nothing selected translates the clipboard: only text copied in the last few minutes
-/// that the panel hasn't seen yet. Each copy is used once, so reopening the panel later keeps your edits.
+/// Decides whether ⌘C C with nothing selected translates the clipboard: only text or an image copied in the last few
+/// minutes that the panel hasn't seen yet. Each copy is used once, so reopening the panel later keeps your edits.
 /// macOS doesn't record when the clipboard changed, so this notes it.
 @MainActor
 final class ClipboardWatcher {
@@ -35,20 +35,21 @@ final class ClipboardWatcher {
         usedChangeCount = changeCount
     }
 
-    /// Clipboard text to translate: copied recently, not seen by the panel yet, and not a password or key.
-    func unusedText() -> String {
+    /// What to translate from the clipboard: text or an image copied recently and not seen by the panel yet, and not
+    /// a password or key.
+    func unusedContent() -> PasteboardContent? {
         poll()
         guard changeCount != usedChangeCount, let lastChange,
-              Date().timeIntervalSince(lastChange) <= Self.freshness else { return "" }
-        return safeText()
+              Date().timeIntervalSince(lastChange) <= Self.freshness, !isHidden() else { return nil }
+        switch PasteboardContent.read(NSPasteboard.general) {
+        case .text(let text) where SecretGuard.containsSecret(text): return nil
+        case let content: return content
+        }
     }
 
-    private func safeText() -> String {
-        let pasteboard = NSPasteboard.general
-        // Password managers mark what they copy as concealed or transient.
-        let hidden = ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType"]
-            .contains { pasteboard.types?.contains(NSPasteboard.PasteboardType($0)) == true }
-        let text = (pasteboard.string(forType: .string) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return hidden || SecretGuard.containsSecret(text) ? "" : text
+    /// Password managers mark what they copy as concealed or transient.
+    private func isHidden() -> Bool {
+        ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType"]
+            .contains { NSPasteboard.general.types?.contains(NSPasteboard.PasteboardType($0)) == true }
     }
 }

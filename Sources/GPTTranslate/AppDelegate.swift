@@ -98,10 +98,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ClipboardWatcher.shared.lastChange = Date().addingTimeInterval(-age)
                     ClipboardWatcher.shared.usedChangeCount = nil
                 }
-                let unused = ClipboardWatcher.shared.unusedText()
-                if unused.isEmpty { panelController.reopen() }
+                let unused = ClipboardWatcher.shared.unusedContent()
+                if unused == nil { panelController.reopen() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    let decision = unused.isEmpty ? "reopen" : "translate clipboard (length \((unused as NSString).length))"
+                    let decision: String
+                    switch unused {
+                    case .text(let text): decision = "translate clipboard text (length \((text as NSString).length))"
+                    case .image(let image): decision = "translate clipboard image (\(Int(image.size.width))x\(Int(image.size.height)))"
+                    case nil: decision = "reopen"
+                    }
                     try? "\(decision)\n\(self?.panelController.model.debugSourceSelection() ?? "")"
                         .write(to: AppPaths.support.appendingPathComponent("debug/prefill.txt"), atomically: true, encoding: .utf8)
                 }
@@ -115,6 +120,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? String(format: "cycle %@ days %d spend %.4f requests %d balance %@", usage.cycle, usage.daysIntoCycle,
                             usage.appSpend, usage.requests, usage.estimatedBalance.map { String(format: "%.2f", $0) } ?? "nil")
                     .write(to: AppPaths.support.appendingPathComponent("debug/renewal.txt"), atomically: true, encoding: .utf8)
+            case "debug-image":
+                // ?file=<name in debug/imageset> translates that image as if it had been copied; ?paste=1 instead puts
+                // it on a private pasteboard and pastes it into the source pane (the general clipboard is untouched).
+                // Records the outcome (lengths only) in debug/image.txt once the translation finishes.
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let file = items.first { $0.name == "file" }?.value ?? ""
+                guard let image = NSImage(contentsOf: AppPaths.support.appendingPathComponent("debug/imageset/\(file)")) else { break }
+                let model = panelController.model
+                if items.contains(where: { $0.name == "paste" }) {
+                    panelController.show(text: "", translate: false)
+                    let pasteboard = NSPasteboard(name: .init("io.github.yufei-zhou.GPTTranslate.debug"))
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects([image])
+                    model.debugPasteImage(from: pasteboard)
+                } else {
+                    panelController.show(image: image)
+                }
+                let start = Date()
+                var firstSource: Double?
+                func poll() {
+                    if firstSource == nil, model.debugSourceLength > 0 { firstSource = Date().timeIntervalSince(start) }
+                    if model.isTranslating && Date().timeIntervalSince(start) < 60 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+                        return
+                    }
+                    let line = String(format: "source after %.2fs, done after %.2fs\n", firstSource ?? -1, Date().timeIntervalSince(start))
+                    try? (line + model.debugImageState())
+                        .write(to: AppPaths.support.appendingPathComponent("debug/image.txt"), atomically: true, encoding: .utf8)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
             case "debug-hide":
                 panelController.hide()
             case "debug-new":
@@ -231,8 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         func check(_ attempt: Int) {
             let pasteboard = NSPasteboard.general
             if pasteboard.changeCount != baseline {
-                let text = (pasteboard.string(forType: .string) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                panelController.show(text: text, translate: !text.isEmpty)
+                switch PasteboardContent.read(pasteboard) {
+                case .image(let image): panelController.show(image: image)
+                case .text(let text): panelController.show(text: text, translate: true)
+                case nil: panelController.show(text: "", translate: false)
+                }
             } else if attempt < 12 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { check(attempt + 1) }
             } else {
@@ -242,14 +280,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { check(0) }
     }
 
-    /// ⌘C C with nothing selected: translates text copied in the last few minutes that the panel hasn't seen yet;
-    /// otherwise reopens the panel as it was left.
+    /// ⌘C C with nothing selected: translates text or an image copied in the last few minutes that the panel hasn't
+    /// seen yet; otherwise reopens the panel as it was left.
     private func openWithoutSelection() {
-        let text = ClipboardWatcher.shared.unusedText()
-        if text.isEmpty {
-            panelController.reopen()
-        } else {
-            panelController.show(text: text, translate: true)
+        switch ClipboardWatcher.shared.unusedContent() {
+        case .text(let text): panelController.show(text: text, translate: true)
+        case .image(let image): panelController.show(image: image)
+        case nil: panelController.reopen()
         }
     }
 

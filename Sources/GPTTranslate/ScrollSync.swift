@@ -80,6 +80,21 @@ final class ScrollSync {
             sourceBounds = [0, from.docHeight]
             toBounds = [0, to.docHeight]
         }
+        // An image above the leading pane's text has no counterpart: while it scrolls away the others stay at the
+        // top.
+        let fromHeader = source.textContainerOrigin.y, toHeader = target.textContainerOrigin.y
+        if fromHeader > 1, toHeader <= 1 {
+            sourceBounds = [0, fromHeader] + sourceBounds.dropFirst()
+            toBounds = [0, 0] + toBounds.dropFirst()
+        } else if toHeader > 1, fromHeader <= 1 {
+            // Led from the other side, the following pane scrolls its image away along with the first paragraphs.
+            // Those are merged until they are at least as tall as the image, so a short first line (a title) doesn't
+            // make the image race past.
+            var k = 1
+            while k < sourceBounds.count - 1, sourceBounds[k] < toHeader { k += 1 }
+            sourceBounds = [0] + sourceBounds[k...]
+            toBounds = [0] + toBounds[k...]
+        }
         let i = max(0, min((sourceBounds.lastIndex { $0 <= anchor } ?? 0), sourceBounds.count - 2))
         let span = sourceBounds[i + 1] - sourceBounds[i]
         let fraction = span > 0 ? min(max((anchor - sourceBounds[i]) / span, 0), 1) : 0
